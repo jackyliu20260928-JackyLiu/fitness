@@ -275,7 +275,15 @@ const state = {
   coachBusy: false,
   zoom: '',           // 放大看照片
   aiDraft: null,      // AI 起草的建议草稿
-  aiBusy: false
+  aiBusy: false,
+  /* 教练 ↔ 会员 对话 */
+  chatOpen: false,    // 会员端是否打开对话页
+  msgs: [],           // 会员端对话
+  msgUnread: 0,       // 教练发来的未读数
+  msgBusy: false,
+  lastMsg: null,      // 最新一条（用于今日页卡片）
+  coachMsgs: [],      // 教练端当前会员的对话
+  coachMsgBusy: false
 };
 let temp = {};
 
@@ -297,6 +305,8 @@ async function boot() {
     state.mode = 'member';
     state.token = t;
     await loadMember();
+    await refreshMsgPeek();
+    render();
     return;
   }
   if (qs('coach') || state.coachPass) {
@@ -327,6 +337,11 @@ function render() {
   if (!configured()) { app.innerHTML = renderSetupHint(); return; }
   if (state.mode === 'landing') { app.innerHTML = renderLanding(); return; }
   if (state.mode === 'member') {
+    if (state.chatOpen) {
+      app.innerHTML = renderMemberChat() + renderToast();
+      scrollChat('chatList');
+      return;
+    }
     app.innerHTML = renderMemberTop() + renderMemberBody() + renderSheet() + renderToast() + renderTabbar();
     const inp = document.getElementById('foodSearch');
     if (inp && state.foodQuery) { /* 保持值即可 */ }
@@ -481,10 +496,11 @@ function renderToday() {
       <span class="ptxt"><b>拍照记录这一餐</b><em>拍一张就行，不用称克数</em></span>
     </button>
 
-    ${m.plan_note ? `<div class="card tight">
-      <div class="row"><b style="font-size:13.5px">教练指导</b><span class="muted">实时同步</span></div>
-      <div style="font-size:13.5px;line-height:1.85;color:var(--ink2);margin-top:8px">${esc(m.plan_note)}</div>
-    </div>` : ''}
+    <div class="card tight chatentry" data-act="openChat">
+      <div class="row"><b style="font-size:13.5px">教练消息</b>
+        <span class="muted">${state.msgUnread ? `<i class="dotred">${state.msgUnread}</i> 条新消息` : '点开和教练聊'}</span></div>
+      <div class="lastmsg">${state.lastMsg ? `<span class="who2">${state.lastMsg.sender === 'coach' ? '教练' : '我'}：</span>${esc(state.lastMsg.body)}` : '还没有消息，可以在这里给教练留言'}</div>
+    </div>
 
     <div class="sec"><div class="l"><div class="bar"></div><b>${friendly(state.date)}的餐食</b></div>
       <span class="muted">${h.meals.length} 项</span></div>
@@ -620,6 +636,50 @@ function renderSpark(list) {
   </svg>`;
 }
 
+/* ---------------- 教练 ↔ 会员 对话 ---------------- */
+function hhmm(sec) {
+  const d = new Date((+sec || 0) * 1000);
+  if (isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  const t = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return dstr(d) === todayStr() ? t : `${d.getMonth() + 1}/${d.getDate()} ${t}`;
+}
+
+/** 谁在右边：me = 当前这个人自己发的 */
+function msgRows(list, meIs) {
+  if (!list.length) {
+    return '<div class="empty" style="padding:30px 0">还没有消息<br>直接在下边说一句就行</div>';
+  }
+  return list.map((x) => {
+    const me = x.sender === meIs;
+    return `<div class="msgrow${me ? ' me' : ''}">
+      <div class="bubble">${esc(x.body)}</div>
+      <div class="mtime">${hhmm(x.at)}</div>
+    </div>`;
+  }).join('');
+}
+
+/** 打开对话页后滚到底部（新消息在下面） */
+function scrollChat(id) {
+  const el = document.getElementById(id);
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function renderMemberChat() {
+  return `<div class="chatpage">
+    <div class="topbar"><div class="row">
+      <button class="del" data-act="closeChat">← 返回</button>
+      <div class="brand" style="font-size:15px">和教练的对话</div>
+      <button class="del" data-act="reloadChat">刷新</button>
+    </div></div>
+    <div class="chatlist" id="chatList">${msgRows(state.msgs, 'member')}</div>
+    <div class="chatbar">
+      <input id="chatInput" placeholder="给教练留言…" maxlength="500" autocomplete="off">
+      <button class="btn primary" data-act="sendMsg"${state.msgBusy ? ' disabled' : ''}>${state.msgBusy ? '发送中…' : '发送'}</button>
+    </div>
+  </div>`;
+}
+
 /* ---------------- 教练端 ---------------- */
 function renderCoach() {
   if (!state.coachPass) return renderCoachLogin();
@@ -656,8 +716,8 @@ function renderCoachList() {
       <div class="top">
         <div class="avatar" style="background:linear-gradient(135deg,#00b96b,#009a58)">${esc(x.name.slice(0, 1))}</div>
         <div class="info">
-          <div class="n">${esc(x.name)} <span class="muted" style="font-weight:500">${GOALS[x.goal]}</span></div>
-          <div class="s">今日 ${Math.round(x.intake)} / ${x.plan.kcal} kcal · 运动 ${Math.round(x.workout_minutes)} 分钟 · ${x.checked_in ? '已打卡' : '未打卡'}</div>
+          <div class="n">${esc(x.name)} <span class="muted" style="font-weight:500">${GOALS[x.goal]}</span>${x.unread ? `<i class="dotred">${x.unread}</i>` : ''}</div>
+          <div class="s">今日 ${Math.round(x.intake)} / ${x.plan.kcal} kcal · 运动 ${Math.round(x.workout_minutes)} 分钟 · ${x.checked_in ? '已打卡' : '未打卡'}${x.unread ? ' · 有新消息' : ''}</div>
         </div>
         <span class="pill ${withAlert(x) ? 'bad' : x.meal_count >= 3 ? 'ok' : x.meal_count ? 'warn' : 'idle'}">
           ${withAlert(x) ? '待跟进' : x.meal_count >= 3 ? '正常' : x.meal_count ? '进行中' : '未记录'}</span>
@@ -739,16 +799,20 @@ function renderCoachDetail() {
     </div>
 
     <div class="card">
-      <div class="row" style="margin-bottom:10px"><b style="font-size:14.5px">下发指导</b><span class="muted">会员端立刻可见</span></div>
-      <button class="btn ai" data-act="aiDraft" data-id="${m.id}">
+      <div class="row" style="margin-bottom:10px"><b style="font-size:14.5px">和会员的对话</b>
+        <span class="muted">${state.coachMsgs.length ? state.coachMsgs.length + ' 条' : '还没聊过'}</span></div>
+      <div class="chatlist inline" id="coachChatList">${msgRows(state.coachMsgs, 'coach')}</div>
+      <button class="btn ai" style="margin-top:12px" data-act="aiDraft" data-id="${m.id}">
         <span class="cam">🤖</span>
-        <span class="ptxt"><b>${state.aiBusy ? 'AI 正在起草…' : '让 AI 先起草一段建议'}</b><em>结合今天的照片和记录生成，你改完再下发</em></span>
+        <span class="ptxt"><b>${state.aiBusy ? 'AI 正在起草…' : '让 AI 先起草一段建议'}</b><em>结合今天的照片和记录生成，你改完再发</em></span>
       </button>
-      <div class="field"><label>每日目标热量（建议 ${plan.autoKcal}）</label>
-        <input id="dKcal" type="number" step="50" value="${plan.kcal}"></div>
-      <div class="field"><label>给会员的指导</label>
-        <textarea id="dNote" placeholder="例如：今天蛋白够了，晚餐主食减半；明天记得加 30 分钟快走">${esc(state.aiDraft !== null ? state.aiDraft : (m.plan_note || ''))}</textarea></div>
-      <button class="btn primary" data-act="savePlan" data-id="${m.id}">保存并下发</button>
+      <div class="chatbar">
+        <input id="coachChatInput" placeholder="回一句…（回车发送）" maxlength="500" value="${esc(state.aiDraft || '')}" autocomplete="off">
+        <button class="btn primary" data-act="sendCoachMsg"${state.coachMsgBusy ? ' disabled' : ''}>${state.coachMsgBusy ? '发送中…' : '发送'}</button>
+      </div>
+      <div class="field" style="margin-top:12px"><label>每日目标热量（建议 ${plan.autoKcal}）</label>
+        <div class="krow"><input id="dKcal" type="number" step="50" value="${plan.kcal}">
+          <button class="btn ghost" data-act="saveKcal" data-id="${m.id}">保存目标</button></div></div>
     </div>
 
     <div class="card">
@@ -985,6 +1049,50 @@ async function loadCoachList() {
 }
 async function loadCoachDetail(id) {
   state.coachDetail = await rpc('coach_member', { p_pass: state.coachPass, p_member: id, p_date: state.coachDate });
+  await loadCoachMsgs(true);
+}
+
+/* ---------------- 对话数据 ---------------- */
+/** 会员端：只取最新一条 + 未读数，用于今日页卡片（不标记已读） */
+async function refreshMsgPeek() {
+  if (!state.token) return;
+  try {
+    const r = await rpc('member_messages', { p_token: state.token, p_limit: 1, p_mark: false });
+    state.msgUnread = r.unread || 0;
+    state.lastMsg = (r.list && r.list.length) ? r.list[r.list.length - 1] : null;
+  } catch (e) {
+    console.warn('[msg] 预览失败', e);
+  }
+}
+/** 会员端：拉整段对话（mark=true 时把教练发来的标记为已读） */
+async function loadChat(mark) {
+  const r = await rpc('member_messages', { p_token: state.token, p_limit: 100, p_mark: mark !== false });
+  state.msgs = r.list || [];
+  state.msgUnread = r.unread || 0;
+  state.lastMsg = state.msgs.length ? state.msgs[state.msgs.length - 1] : null;
+}
+/** 教练端：拉当前会员的对话 */
+async function loadCoachMsgs(mark) {
+  if (!state.coachMemberId) { state.coachMsgs = []; return; }
+  const r = await rpc('coach_messages', {
+    p_pass: state.coachPass, p_member: state.coachMemberId, p_limit: 100, p_mark: mark !== false
+  });
+  state.coachMsgs = r.list || [];
+}
+
+/** 对话页开着的时候每 20 秒自动拉一次（静态网页没有推送，靠轮询兜底） */
+let chatPoll = null;
+function startChatPoll() {
+  stopChatPoll();
+  chatPoll = setInterval(async () => {
+    if (!state.chatOpen || !state.token) { stopChatPoll(); return; }
+    const el = document.getElementById('chatInput');
+    if (el && el.value.trim()) return;   // 正在打字，别把输入框内容冲掉
+    try { await loadChat(true); render(); } catch (e) { /* 网络抖动就跳过 */ }
+  }, 20000);
+}
+function stopChatPoll() {
+  if (chatPoll) { clearInterval(chatPoll); chatPoll = null; }
 }
 
 /* ---------------- 交互 ---------------- */
@@ -1270,7 +1378,7 @@ document.addEventListener('click', async (e) => {
           const r = await res.json();
           if (!r.text) throw new Error('AI 没给出内容，稍后再试');
           state.aiDraft = r.text;
-          toast('AI 草稿已生成，改完点「保存并下发」');
+          toast('AI 草稿已生成，改完点「发送」');
         } catch (e) {
           console.error('[aiDraft]', e);
           toast(e.message || 'AI 起草失败');
@@ -1280,19 +1388,71 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'openMember':
-        state.coachMemberId = id; state.aiDraft = null; render();
+        state.coachMemberId = id; state.aiDraft = null; state.coachMsgs = []; render();
         await loadCoachDetail(id); render(); break;
-      case 'coachBack': state.coachMemberId = ''; state.coachDetail = null; state.aiDraft = null; render(); break;
-      case 'savePlan': {
-        await rpc('coach_save_plan', { p_pass: state.coachPass, p_member: id, p_kcal: num(val('dKcal')), p_note: val('dNote') });
-        state.aiDraft = null;
-        await loadCoachDetail(id); render(); toast('已下发，会员端立刻可见');
+      case 'coachBack': state.coachMemberId = ''; state.coachDetail = null; state.aiDraft = null; state.coachMsgs = []; render(); break;
+
+      /* --- 教练 ↔ 会员 对话 --- */
+      case 'sendCoachMsg': {
+        if (state.coachMsgBusy) return;
+        const mid = state.coachMemberId;
+        if (!mid) return toast('先打开会员详情');
+        const body = val('coachChatInput');
+        if (!body) return toast('说点什么再发');
+        state.coachMsgBusy = true; render();
+        try {
+          await rpc('coach_send_message', { p_pass: state.coachPass, p_member: mid, p_body: body });
+          state.aiDraft = null;
+          await loadCoachMsgs(true);
+          await loadCoachList();
+          render();
+        } finally { state.coachMsgBusy = false; render(); }
+        break;
+      }
+      case 'reloadCoachChat': {
+        await loadCoachMsgs(true); render(); toast('已刷新');
+        break;
+      }
+      case 'saveKcal': {
+        const d = state.coachDetail;
+        const mid = state.coachMemberId || id;
+        await rpc('coach_save_plan', {
+          p_pass: state.coachPass, p_member: mid,
+          p_kcal: num(val('dKcal')), p_note: (d && d.member && d.member.plan_note) || ''
+        });
+        await loadCoachDetail(mid); render(); toast('目标热量已保存');
         break;
       }
       case 'copyLink':
         try { await navigator.clipboard.writeText(v); toast('链接已复制'); }
         catch (err) { console.error(err); toast('复制失败，请手动长按选择'); }
         break;
+
+      /* --- 会员端：和教练的对话 --- */
+      case 'openChat':
+        state.chatOpen = true; state.msgBusy = false;
+        render();
+        try { await loadChat(true); } catch (e) { toast(e.message || '加载失败'); }
+        render(); startChatPoll();
+        break;
+      case 'closeChat':
+        state.chatOpen = false; stopChatPoll();
+        await refreshMsgPeek(); render();
+        break;
+      case 'reloadChat':
+        try { await loadChat(true); render(); toast('已刷新'); } catch (e) { toast(e.message || '刷新失败'); }
+        break;
+      case 'sendMsg': {
+        if (state.msgBusy) return;
+        const body = val('chatInput');
+        if (!body) return toast('说点什么再发');
+        state.msgBusy = true; render();
+        try {
+          await rpc('member_send_message', { p_token: state.token, p_body: body });
+          await loadChat(true);
+        } finally { state.msgBusy = false; render(); scrollChat('chatList'); }
+        break;
+      }
       case 'openAddMember': state.sheet = { type: 'addMember' }; temp = {}; render(); break;
       case 'nmGender': temp.gender = v; markOn(el); break;
       case 'nmGoal': temp.goal = v; markOn(el); break;
@@ -1321,11 +1481,24 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('input', (e) => {
-  if (e.target.id === 'dNote') { state.aiDraft = e.target.value; return; }
   if (e.target.id !== 'foodSearch') return;
   state.foodQuery = e.target.value;
   const box = document.getElementById('foodList');
   if (box) box.innerHTML = foodRows(filterFoods());
+});
+
+/* 对话输入框：回车发送 */
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'chatInput') {
+    e.preventDefault();
+    const btn = document.querySelector('[data-act="sendMsg"]');
+    if (btn) btn.click();
+  } else if (e.target.id === 'coachChatInput') {
+    e.preventDefault();
+    const btn = document.querySelector('[data-act="sendCoachMsg"]');
+    if (btn) btn.click();
+  }
 });
 
 document.addEventListener('change', (e) => {
