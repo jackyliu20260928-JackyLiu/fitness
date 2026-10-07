@@ -24,26 +24,27 @@ const ACT = {
 };
 const GOALS = { lose: '减脂', gain: '增肌', keep: '保持' };
 
-/* 内置食物库（客户端静态，不占数据库） */
+/* 内置食物库（客户端静态，不占数据库）
+   unit 一律用大白话的量词（碗/个/片/块…），数字是「这么一份」的营养，不用克 */
 const FOODS = [
-  { id: 'f01', name: '鸡胸肉', cat: '肉蛋类', unit: '100g', kcal: 133, p: 24, c: 2.5, f: 3.5 },
-  { id: 'f02', name: '水煮蛋', cat: '肉蛋类', unit: '1个', kcal: 78, p: 6.5, c: 0.6, f: 5.3 },
-  { id: 'f03', name: '三文鱼', cat: '肉蛋类', unit: '100g', kcal: 208, p: 20, c: 0, f: 13 },
-  { id: 'f04', name: '瘦牛肉', cat: '肉蛋类', unit: '100g', kcal: 106, p: 20.2, c: 1.2, f: 2.3 },
-  { id: 'f05', name: '白米饭', cat: '主食', unit: '100g', kcal: 116, p: 2.6, c: 25.9, f: 0.3 },
-  { id: 'f06', name: '燕麦片', cat: '主食', unit: '100g', kcal: 377, p: 13, c: 66, f: 7 },
-  { id: 'f07', name: '红薯', cat: '主食', unit: '100g', kcal: 86, p: 1.6, c: 20, f: 0.2 },
-  { id: 'f08', name: '全麦面包', cat: '主食', unit: '1片', kcal: 82, p: 3, c: 14, f: 1.2 },
-  { id: 'f09', name: '西兰花', cat: '蔬菜', unit: '100g', kcal: 34, p: 2.8, c: 6.6, f: 0.4 },
-  { id: 'f10', name: '牛油果', cat: '水果', unit: '1个', kcal: 234, p: 2.9, c: 12, f: 21 },
-  { id: 'f11', name: '香蕉', cat: '水果', unit: '1根', kcal: 105, p: 1.3, c: 27, f: 0.4 },
-  { id: 'f12', name: '苹果', cat: '水果', unit: '1个', kcal: 95, p: 0.5, c: 25, f: 0.3 },
-  { id: 'f13', name: '蓝莓', cat: '水果', unit: '100g', kcal: 57, p: 0.7, c: 14.5, f: 0.3 },
-  { id: 'f14', name: '牛奶', cat: '奶制品', unit: '250ml', kcal: 155, p: 8, c: 12, f: 8 },
-  { id: 'f15', name: '无糖酸奶', cat: '奶制品', unit: '100g', kcal: 60, p: 3.5, c: 4, f: 3.3 },
-  { id: 'f16', name: '巴旦木', cat: '坚果', unit: '30g', kcal: 174, p: 6.4, c: 6, f: 15 },
-  { id: 'f17', name: '拿铁咖啡', cat: '饮品', unit: '1杯', kcal: 135, p: 7, c: 13, f: 6 },
-  { id: 'f18', name: '乳清蛋白粉', cat: '补剂', unit: '1勺', kcal: 120, p: 24, c: 3, f: 1.5 }
+  { id: 'f01', name: '鸡胸肉', cat: '肉蛋类', unit: '块', kcal: 200, p: 36, c: 4, f: 5 },
+  { id: 'f02', name: '水煮蛋', cat: '肉蛋类', unit: '个', kcal: 78, p: 6.5, c: 0.6, f: 5.3 },
+  { id: 'f03', name: '三文鱼', cat: '肉蛋类', unit: '块', kcal: 230, p: 24, c: 0, f: 15 },
+  { id: 'f04', name: '瘦牛肉', cat: '肉蛋类', unit: '小盘', kcal: 130, p: 24, c: 1.4, f: 3 },
+  { id: 'f05', name: '白米饭', cat: '主食', unit: '碗', kcal: 230, p: 5, c: 52, f: 0.5 },
+  { id: 'f06', name: '燕麦片', cat: '主食', unit: '小碗', kcal: 150, p: 5, c: 26, f: 3 },
+  { id: 'f07', name: '红薯', cat: '主食', unit: '个', kcal: 175, p: 3, c: 40, f: 0.5 },
+  { id: 'f08', name: '全麦面包', cat: '主食', unit: '片', kcal: 82, p: 3, c: 14, f: 1.2 },
+  { id: 'f09', name: '西兰花', cat: '蔬菜', unit: '小盘', kcal: 60, p: 4, c: 10, f: 0.5 },
+  { id: 'f10', name: '牛油果', cat: '水果', unit: '个', kcal: 234, p: 2.9, c: 12, f: 21 },
+  { id: 'f11', name: '香蕉', cat: '水果', unit: '根', kcal: 105, p: 1.3, c: 27, f: 0.4 },
+  { id: 'f12', name: '苹果', cat: '水果', unit: '个', kcal: 95, p: 0.5, c: 25, f: 0.3 },
+  { id: 'f13', name: '蓝莓', cat: '水果', unit: '小盒', kcal: 80, p: 1, c: 18, f: 0.5 },
+  { id: 'f14', name: '牛奶', cat: '奶制品', unit: '盒', kcal: 155, p: 8, c: 12, f: 8 },
+  { id: 'f15', name: '无糖酸奶', cat: '奶制品', unit: '杯', kcal: 90, p: 5, c: 6, f: 5 },
+  { id: 'f16', name: '巴旦木', cat: '坚果', unit: '小把', kcal: 120, p: 4, c: 4, f: 10 },
+  { id: 'f17', name: '拿铁咖啡', cat: '饮品', unit: '杯', kcal: 135, p: 7, c: 13, f: 6 },
+  { id: 'f18', name: '乳清蛋白粉', cat: '补剂', unit: '勺', kcal: 120, p: 24, c: 3, f: 1.5 }
 ];
 const CATS = ['全部', '主食', '肉蛋类', '蔬菜', '水果', '奶制品', '坚果', '饮品', '补剂', '我的'];
 
@@ -76,6 +77,15 @@ function friendly(s) {
 function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function num(v, d) { const n = Number(v); return isFinite(n) ? n : (d || 0); }
 function round1(n) { return Math.round(n * 10) / 10; }
+
+/** 份量显示：新的量词直接拼（1.5碗），老的带数字单位（100g / 照片）仍显示成 1.5 × 100g */
+function qty(amount, unit) {
+  const u = String(unit == null ? '' : unit).trim();
+  const a = round1(num(amount, 1));
+  if (!u) return `${a} 份`;
+  if (/^[\d一二三四五六七八九十]/.test(u)) return `${a} × ${esc(u)}`;
+  return `${a}${esc(u)}`;
+}
 function qs(k) { return new URLSearchParams(location.search).get(k) || ''; }
 
 /* ---------------- 云端调用 ---------------- */
@@ -432,7 +442,7 @@ function renderToday() {
           ${isPhoto && x.photo_url ? `<img class="thumb" src="${esc(x.photo_url)}" alt="" data-act="zoom" data-src="${esc(x.photo_url)}">` : ''}
           <div class="fmeta">
             <div class="n">${esc(x.name)}${isPhoto ? '<span class="tagai">AI 估</span>' : ''}</div>
-            <div class="s">${isPhoto ? (x.ai_note ? esc(x.ai_note) : '照片识别') : `${x.amount} × ${esc(x.unit)}`}</div>
+            <div class="s">${isPhoto ? (x.ai_note ? esc(x.ai_note) : '照片识别') : `${qty(x.amount, x.unit)}`}</div>
           </div>
           <div class="fkcal">${Math.round(x.kcal)}<em>kcal</em></div>
           <button class="del" data-act="delMeal" data-id="${x.id}">删</button>
@@ -537,7 +547,7 @@ function foodRows(list) {
   if (!list.length) return '<div class="empty">没找到，换个词试试<br>也可以点下面「手动填一个」</div>';
   return list.map((f) => `<div class="frow">
     <div class="fmeta"><div class="n">${esc(f.name)}</div>
-      <div class="s">${esc(f.unit)} · 蛋${Math.round(f.p)} 碳${Math.round(f.c)} 脂${Math.round(f.f)}${f.cat === '我的' ? ' · 我加的' : ''}</div></div>
+      <div class="s">${qty(1, f.unit)} · 蛋${Math.round(f.p)} 碳${Math.round(f.c)} 脂${Math.round(f.f)}${f.cat === '我的' ? ' · 我加的' : ''}</div></div>
     <div class="fkcal" style="margin-right:8px">${f.kcal}<em>kcal</em></div>
     <button class="addbtn" data-act="pickFood" data-id="${f.id}">+</button>
   </div>`).join('');
@@ -760,7 +770,7 @@ function renderCoachDetail() {
             return `<div class="frow">
               ${isPhoto && x.photo_url ? `<img class="thumb" src="${esc(x.photo_url)}" alt="" data-act="zoom" data-src="${esc(x.photo_url)}">` : ''}
               <div class="fmeta"><div class="n">${esc(x.name)}${isPhoto ? '<span class="tagai">AI 估</span>' : ''}</div>
-                <div class="s">${isPhoto ? (x.ai_note ? esc(x.ai_note) : '照片识别') : `${x.amount} × ${esc(x.unit)}`}</div></div>
+                <div class="s">${isPhoto ? (x.ai_note ? esc(x.ai_note) : '照片识别') : `${qty(x.amount, x.unit)}`}</div></div>
               <div class="fkcal">${Math.round(x.kcal)}<em>kcal</em></div></div>`;
           }).join('');
       }).join('') : '<div class="empty">今天还没有记录</div>'}
@@ -807,9 +817,9 @@ function renderSheet() {
     const kcal = Math.round(f.kcal * s.amount);
     return `<div class="mask" data-act="closeSheet"><div class="sheet">
       <h3>${esc(f.name)}</h3>
-      <div class="sub">${esc(f.unit)} · 每单位 ${f.kcal} kcal</div>
+      <div class="sub">${qty(1, f.unit)} 约 ${f.kcal} kcal</div>
       <div class="stepper">
-        <button data-act="amt" data-v="-0.5">−</button><div class="v">${s.amount} 份</div>
+        <button data-act="amt" data-v="-0.5">−</button><div class="v">${qty(s.amount, f.unit)}</div>
         <button data-act="amt" data-v="0.5">+</button>
       </div>
       <div class="muted" style="text-align:center;margin-bottom:14px">
@@ -824,12 +834,12 @@ function renderSheet() {
   if (s.type === 'customFood') {
     return `<div class="mask" data-act="closeSheet"><div class="sheet">
       <h3>手动填一个食物</h3>
-      <div class="sub">照着包装上的营养成分表填就行</div>
+      <div class="sub">按「你吃的那一份」填就行，不用称克数</div>
       <div style="height:14px"></div>
       <div class="field"><label>食物名称</label><input id="cfName" placeholder="例如：楼下那家牛肉面"></div>
       <div class="grid2">
-        <div class="field"><label>单位</label><input id="cfUnit" placeholder="1份 / 100g"></div>
-        <div class="field"><label>热量 kcal</label><input id="cfKcal" type="number" placeholder="如 650"></div>
+        <div class="field"><label>怎么算一份</label><input id="cfUnit" placeholder="如：碗 / 盘 / 个"></div>
+        <div class="field"><label>一份的热量 kcal</label><input id="cfKcal" type="number" placeholder="如 650"></div>
       </div>
       <div class="grid2">
         <div class="field"><label>蛋白质 g</label><input id="cfP" type="number" placeholder="选填"></div>
@@ -1040,7 +1050,7 @@ document.addEventListener('click', async (e) => {
         const unitKcal = num(val('cfKcal'), 0);
         if (!unitKcal) return toast('请填热量');
         const n = Math.max(0.5, Math.min(20, num(val('cfAmount'), 1)));
-        const unit = val('cfUnit') || '1份';
+        const unit = val('cfUnit') || '份';
         const mcP = num(val('cfP'), 0), mcC = num(val('cfC'), 0), mcF = num(val('cfF'), 0);
         state.busy = true;
         try {
