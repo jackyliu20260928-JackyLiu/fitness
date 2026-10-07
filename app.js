@@ -675,12 +675,12 @@ function renderCoachList() {
       <div class="sub">摄入 / 运动 / 打卡，异常自动标红</div>
       <div class="stats">
         <div class="stat"><b>${list.length}</b><span>在带会员</span></div>
-        <div class="stat"><b>${done}</b><span>已记录</span></div>
+        <div class="stat"><b>${done}</b><span>记满三餐</span></div>
         <div class="stat bad"><b>${bad}</b><span>需关注</span></div>
       </div>
     </div>
     <div class="filters">
-      ${[['all', '全部'], ['bad', '待跟进'], ['done', '已记录'], ['none', '未记录']].map(([k, t]) =>
+      ${[['all', '全部'], ['bad', '待跟进'], ['done', '记满三餐'], ['none', '未记录']].map(([k, t]) =>
         `<button data-act="cFilter" data-v="${k}" class="${state.coachFilter === k ? 'on' : ''}">${t}</button>`).join('')}
     </div>
     <div class="sec"><div class="l"><div class="bar"></div><b>会员列表</b></div>
