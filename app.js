@@ -113,6 +113,128 @@ async function rpc(fn, params) {
   return data;
 }
 
+/* ---------------- 照片相关 ---------------- */
+function rndStr(n) {
+  const c = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let s = '';
+  for (let i = 0; i < n; i++) s += c[Math.floor(Math.random() * c.length)];
+  return s;
+}
+
+/** 把手机拍的几 MB 大图压到 ~100KB：省流量、省存储、AI 也够看 */
+function compressImage(file, maxSide) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objUrl = URL.createObjectURL(file);
+    const done = (fn) => { URL.revokeObjectURL(objUrl); fn(); };
+    img.onload = () => done(() => {
+      try {
+        let w = img.naturalWidth, h = img.naturalHeight;
+        const scale = Math.min(1, (maxSide || 1024) / Math.max(w, h));
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        cv.toBlob((blob) => {
+          blob ? resolve(blob) : reject(new Error('图片处理失败，换一张试试'));
+        }, 'image/jpeg', 0.72);
+      } catch (e) { reject(new Error('图片处理失败，换一张试试')); }
+    });
+    img.onerror = () => done(() => reject(new Error('这张图读不出来，换一张试试')));
+    img.src = objUrl;
+  });
+}
+
+async function uploadPhoto(blob) {
+  const path = state.date + '/' + rndStr(14) + '.jpg';
+  let res;
+  try {
+    res = await fetch(`${CFG.SUPABASE_URL}/storage/v1/object/meal-photos/${path}`, {
+      method: 'POST',
+      headers: {
+        apikey: CFG.SUPABASE_ANON_KEY,
+        Authorization: 'Bearer ' + CFG.SUPABASE_ANON_KEY,
+        'Content-Type': 'image/jpeg',
+        'x-upsert': 'true'
+      },
+      body: blob
+    });
+  } catch (e) {
+    console.error('[upload] 网络异常', e);
+    throw new Error('照片上传失败，请检查网络后重试');
+  }
+  if (!res.ok) {
+    const t = await res.text();
+    console.error('[upload] 失败', res.status, t);
+    throw new Error('照片上传失败（' + res.status + '），请重试');
+  }
+  return `${CFG.SUPABASE_URL}/storage/v1/object/public/meal-photos/${path}`;
+}
+
+/** 调后端 AI 识别（真正的模型 key 藏在服务端，前端拿不到） */
+async function analyzePhoto(photoUrl, meal) {
+  let res;
+  try {
+    res = await fetch(`${CFG.SUPABASE_URL}/functions/v1/analyze-meal`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: CFG.SUPABASE_ANON_KEY,
+        Authorization: 'Bearer ' + CFG.SUPABASE_ANON_KEY
+      },
+      body: JSON.stringify({ photo_url: photoUrl, meal })
+    });
+  } catch (e) {
+    console.error('[ai] 网络异常', e);
+    throw new Error('AI 识别连不上，请重试');
+  }
+  if (!res.ok) {
+    const t = await res.text();
+    console.error('[ai] 失败', res.status, t);
+    throw new Error('AI 识别暂时不可用（' + res.status + '）');
+  }
+  const data = await res.json();
+  if (data && data.ok === false) throw new Error(data.error || 'AI 没识别出来，换张更清楚的图试试');
+  return data;
+}
+
+/** 选好图之后的完整流程：压缩 → 上传 → AI 识别 → 出结果 */
+async function runPhotoFlow(file) {
+  const s = state.sheet;
+  if (!s || s.type !== 'photo') return;
+  const meal = s.meal;
+  const base = { type: 'photo', meal };
+  try {
+    state.sheet = Object.assign({}, base, { phase: 'busy', msg: '正在上传照片…' });
+    render();
+    const blob = await compressImage(file, 1024);
+    const photoUrl = await uploadPhoto(blob);
+
+    state.sheet = Object.assign({}, base, { phase: 'busy', msg: 'AI 正在识别…', photoUrl });
+    render();
+
+    let ai = null;
+    try {
+      ai = await analyzePhoto(photoUrl, meal);
+    } catch (e) {
+      console.warn('[photo] AI 不可用，转手动填热量', e);
+      state.sheet = Object.assign({}, base, { phase: 'done', photoUrl, ai: null });
+      render();
+      toast('AI 暂时不可用，可以自己填个大概热量');
+      return;
+    }
+
+    state.sheet = Object.assign({}, base, { phase: 'done', photoUrl, ai });
+    render();
+  } catch (err) {
+    console.error('[photo] 流程失败', err);
+    state.sheet = Object.assign({}, base, { phase: 'pick' });
+    render();
+    toast(err.message || '失败了，重试一下');
+  }
+}
+
 /* ---------------- 状态 ---------------- */
 const MY_FOODS_KEY = 'fit_my_foods';
 
@@ -140,7 +262,10 @@ const state = {
   coachMemberId: '',
   coachDetail: null,
   coachFilter: 'all',
-  coachBusy: false
+  coachBusy: false,
+  zoom: '',           // 放大看照片
+  aiDraft: null,      // AI 起草的建议草稿
+  aiBusy: false
 };
 let temp = {};
 
@@ -301,11 +426,18 @@ function renderToday() {
       <div class="row" style="margin-bottom:6px">
         <b style="font-size:14.5px">${meal.label}</b><span class="muted">${total} kcal</span>
       </div>
-      ${items.length ? items.map((x) => `<div class="frow">
-          <div class="fmeta"><div class="n">${esc(x.name)}</div><div class="s">${x.amount} × ${esc(x.unit)}</div></div>
+      ${items.length ? items.map((x) => {
+        const isPhoto = x.source === 'photo';
+        return `<div class="frow">
+          ${isPhoto && x.photo_url ? `<img class="thumb" src="${esc(x.photo_url)}" alt="" data-act="zoom" data-src="${esc(x.photo_url)}">` : ''}
+          <div class="fmeta">
+            <div class="n">${esc(x.name)}${isPhoto ? '<span class="tagai">AI 估</span>' : ''}</div>
+            <div class="s">${isPhoto ? (x.ai_note ? esc(x.ai_note) : '照片识别') : `${x.amount} × ${esc(x.unit)}`}</div>
+          </div>
           <div class="fkcal">${Math.round(x.kcal)}<em>kcal</em></div>
           <button class="del" data-act="delMeal" data-id="${x.id}">删</button>
-        </div>`).join('') : '<div class="empty" style="padding:14px 0">还没记录</div>'}
+        </div>`;
+      }).join('') : '<div class="empty" style="padding:14px 0">还没记录</div>'}
       <button class="btn ghost" style="margin-top:10px;padding:10px" data-act="openAdd" data-meal="${meal.key}">+ 添加${meal.label}</button>
     </div>`;
   }).join('');
@@ -333,6 +465,11 @@ function renderToday() {
     </div>
 
     ${renderReportCard(intake, workoutMin)}
+
+    <button class="btn photo" data-act="openPhoto" data-meal="${suggestMeal()}">
+      <span class="cam">📷</span>
+      <span class="ptxt"><b>拍照记录这一餐</b><em>不用称克数，拍张照就行</em></span>
+    </button>
 
     ${m.plan_note ? `<div class="card tight">
       <div class="row"><b style="font-size:13.5px">教练指导</b><span class="muted">实时同步</span></div>
@@ -381,10 +518,14 @@ function renderReportCard(intake, workoutMin) {
 function renderAdd() {
   const list = filterFoods();
   return `<div class="wrap">
-    <div class="phead"><h1>加餐食</h1><p>选食物 → 自动算热量与三大营养素</p></div>
+    <div class="phead"><h1>加餐食</h1><p>拍照最省事，选食物最精确</p></div>
+    <button class="btn photo" data-act="openPhoto">
+      <span class="cam">📷</span>
+      <span class="ptxt"><b>拍照记录</b><em>拍一张，AI 估个大概，教练复核</em></span>
+    </button>
     <div class="search">
       <span>🔍</span>
-      <input id="foodSearch" placeholder="搜索食物，如：鸡胸肉" value="${esc(state.foodQuery)}">
+      <input id="foodSearch" placeholder="或搜索食物，如：鸡胸肉" value="${esc(state.foodQuery)}">
     </div>
     <div class="cats">${CATS.map((c) => `<button data-act="cat" data-v="${c}" class="${state.foodCat === c ? 'on' : ''}">${c}</button>`).join('')}</div>
     <div class="card" id="foodList">${foodRows(list)}</div>
@@ -589,10 +730,14 @@ function renderCoachDetail() {
 
     <div class="card">
       <div class="row" style="margin-bottom:10px"><b style="font-size:14.5px">下发指导</b><span class="muted">会员端立刻可见</span></div>
+      <button class="btn ai" data-act="aiDraft" data-id="${m.id}">
+        <span class="cam">🤖</span>
+        <span class="ptxt"><b>${state.aiBusy ? 'AI 正在起草…' : '让 AI 先起草一段建议'}</b><em>结合今天的照片和记录生成，你改完再下发</em></span>
+      </button>
       <div class="field"><label>每日目标热量（建议 ${plan.autoKcal}）</label>
         <input id="dKcal" type="number" step="50" value="${plan.kcal}"></div>
       <div class="field"><label>给会员的指导</label>
-        <textarea id="dNote" placeholder="例如：今天蛋白够了，晚餐主食减半；明天记得加 30 分钟快走">${esc(m.plan_note || '')}</textarea></div>
+        <textarea id="dNote" placeholder="例如：今天蛋白够了，晚餐主食减半；明天记得加 30 分钟快走">${esc(state.aiDraft !== null ? state.aiDraft : (m.plan_note || ''))}</textarea></div>
       <button class="btn primary" data-act="savePlan" data-id="${m.id}">保存并下发</button>
     </div>
 
@@ -610,9 +755,14 @@ function renderCoachDetail() {
         if (!items.length) return '';
         return `<div class="row" style="margin:6px 0 2px"><b style="font-size:13px">${meal.label}</b>
           <span class="muted">${Math.round(tot(items).kcal)} kcal</span></div>` +
-          items.map((x) => `<div class="frow"><div class="fmeta"><div class="n">${esc(x.name)}</div>
-            <div class="s">${x.amount} × ${esc(x.unit)}</div></div>
-            <div class="fkcal">${Math.round(x.kcal)}<em>kcal</em></div></div>`).join('');
+          items.map((x) => {
+            const isPhoto = x.source === 'photo';
+            return `<div class="frow">
+              ${isPhoto && x.photo_url ? `<img class="thumb" src="${esc(x.photo_url)}" alt="" data-act="zoom" data-src="${esc(x.photo_url)}">` : ''}
+              <div class="fmeta"><div class="n">${esc(x.name)}${isPhoto ? '<span class="tagai">AI 估</span>' : ''}</div>
+                <div class="s">${isPhoto ? (x.ai_note ? esc(x.ai_note) : '照片识别') : `${x.amount} × ${esc(x.unit)}`}</div></div>
+              <div class="fkcal">${Math.round(x.kcal)}<em>kcal</em></div></div>`;
+          }).join('');
       }).join('') : '<div class="empty">今天还没有记录</div>'}
     </div>
 
@@ -643,6 +793,12 @@ function renderCoachDetail() {
 
 /* ---------------- 弹层 ---------------- */
 function renderSheet() {
+  if (state.zoom) {
+    return `<div class="lightbox" data-act="closeZoom">
+      <img src="${esc(state.zoom)}" alt="">
+      <div class="lbtip">点任意处关闭</div>
+    </div>`;
+  }
   const s = state.sheet;
   if (!s) return '';
   if (s.type === 'pickFood') {
@@ -687,6 +843,54 @@ function renderSheet() {
         <div class="seg">${MEALS.map((x) => `<button data-act="sheetMeal" data-v="${x.key}" class="${s.meal === x.key ? 'on' : ''}">${x.label}</button>`).join('')}</div></div>
       <button class="btn primary" data-act="confirmCustomFood">加入${(MEALS.find((x) => x.key === s.meal) || MEALS[0]).label}</button>
       <button class="btn ghost" style="margin-top:8px" data-act="closeSheet">取消</button>
+    </div></div>`;
+  }
+  if (s.type === 'photo') {
+    const mealBtns = `<div class="seg">${MEALS.map((x) => `<button data-act="photoMeal" data-v="${x.key}" class="${s.meal === x.key ? 'on' : ''}">${x.label}</button>`).join('')}</div>`;
+    const mealLabel = (MEALS.find((x) => x.key === s.meal) || MEALS[0]).label;
+
+    if (s.phase === 'pick') {
+      return `<div class="mask" data-act="closeSheet"><div class="sheet">
+        <h3>拍照记录</h3>
+        <div class="sub">拍一张这餐的照片，AI 帮你估个大概</div>
+        <div style="height:16px"></div>
+        <div class="field"><label>这是哪一餐</label>${mealBtns}</div>
+        <label class="photopick">
+          <span class="cam">📷</span>
+          <b>点这里拍照 / 从相册选</b>
+          <em>建议拍全一点，把整桌都拍进去</em>
+          <input id="photoFile" type="file" accept="image/*" capture="environment">
+        </label>
+        <div class="hint">AI 给的是<b>大概值</b>，教练会复核后再给你正式建议。</div>
+        <button class="btn ghost" style="margin-top:14px" data-act="closeSheet">取消</button>
+      </div></div>`;
+    }
+
+    if (s.phase === 'busy') {
+      return `<div class="mask"><div class="sheet">
+        <h3>${esc(s.msg || '处理中…')}</h3>
+        <div class="sub">大概几秒，别关页面</div>
+        <div class="loadingbar"><i></i></div>
+        ${s.photoUrl ? `<img class="preview" src="${esc(s.photoUrl)}" alt="">` : ''}
+      </div></div>`;
+    }
+
+    const a = s.ai;
+    return `<div class="mask" data-act="closeSheet"><div class="sheet">
+      <h3>${esc(a ? (a.summary || '照片记录') : '照片已上传')}</h3>
+      <div class="sub">${a ? 'AI 预估 · 仅供参考，教练会复核' : 'AI 暂时没识别出来，可以自己填个大概'}</div>
+      <img class="preview" src="${esc(s.photoUrl)}" alt="">
+      ${a ? `<div class="aibox">
+          <div class="airow"><span>热量</span><b>${Math.round(a.kcal || 0)} kcal</b></div>
+          <div class="airow"><span>蛋白质</span><b>${round1(a.p || 0)} g</b></div>
+          <div class="airow"><span>碳水</span><b>${round1(a.c || 0)} g</b></div>
+          <div class="airow"><span>脂肪</span><b>${round1(a.f || 0)} g</b></div>
+        </div>${a.note ? `<div class="muted" style="line-height:1.75;font-size:13px;margin-top:10px">${esc(a.note)}</div>` : ''}`
+      : `<div class="field" style="margin-top:12px"><label>大概多少热量（可留空）</label>
+           <input id="photoKcal" type="number" placeholder="例如 650"></div>`}
+      <div class="field" style="margin-top:12px"><label>记到哪一餐</label>${mealBtns}</div>
+      <button class="btn primary" data-act="confirmPhoto">确认加入${mealLabel}</button>
+      <button class="btn ghost" style="margin-top:8px" data-act="photoRetry">重拍一张</button>
     </div></div>`;
   }
   if (s.type === 'checkin') {
@@ -843,6 +1047,41 @@ document.addEventListener('click', async (e) => {
         } finally { state.busy = false; }
         break;
       }
+      case 'openPhoto':
+        state.sheet = { type: 'photo', meal: el.dataset.meal || temp.meal || suggestMeal(), phase: 'pick' };
+        render(); break;
+      case 'photoMeal':
+        state.sheet.meal = v; render(); break;
+      case 'photoRetry':
+        state.sheet = { type: 'photo', meal: (state.sheet && state.sheet.meal) || suggestMeal(), phase: 'pick' };
+        render(); break;
+      case 'confirmPhoto': {
+        if (state.busy) return;
+        const s = state.sheet;
+        const a = s.ai || null;
+        const kcal = a ? Math.round(a.kcal || 0) : num(val('photoKcal'), 0);
+        state.busy = true;
+        try {
+          await rpc('member_add_photo_meal', {
+            p_token: state.token,
+            p_date: state.date,
+            p_meal: s.meal,
+            p_photo_url: s.photoUrl,
+            p_summary: (a && a.summary) || '照片记录',
+            p_kcal: Math.max(0, kcal),
+            p_p: a ? round1(a.p || 0) : 0,
+            p_c: a ? round1(a.c || 0) : 0,
+            p_f: a ? round1(a.f || 0) : 0,
+            p_ai_note: (a && a.note) || (a ? '' : '照片待教练评估')
+          });
+          state.sheet = null; state.mtab = 'today';
+          await loadMember();
+          toast('已加入，教练会复核');
+        } finally { state.busy = false; }
+        break;
+      }
+      case 'zoom': state.zoom = el.dataset.src || ''; render(); break;
+      case 'closeZoom': state.zoom = ''; render(); break;
       case 'closeSheet':
         if (el.classList.contains('mask') && e.target !== el) break;
         state.sheet = null; temp = {}; render(); break;
@@ -952,12 +1191,66 @@ document.addEventListener('click', async (e) => {
         toast('已停用');
         break;
       }
+      case 'aiDraft': {
+        if (state.aiBusy) return;
+        const d = state.coachDetail;
+        if (!d || !d.member) return toast('先打开会员详情');
+        state.aiBusy = true; render();
+        try {
+          const mm = d.member;
+          const meals = d.meals || [];
+          const sum = (k) => meals.reduce((a, x) => a + (+x[k] || 0), 0);
+          const payload = {
+            date: state.coachDate,
+            member: {
+              name: mm.name, goal: mm.goal, weight: mm.weight, height: mm.height,
+              body_fat: mm.body_fat, age: mm.age, activity: mm.activity
+            },
+            target_kcal: Number(val('dKcal')) || (d.plan && d.plan.kcal) || 0,
+            intake_kcal: Math.round(sum('kcal')),
+            macros: { p: Math.round(sum('p')), c: Math.round(sum('c')), f: Math.round(sum('f')) },
+            meals: meals.map((x) => ({ meal: x.meal, name: x.name, kcal: Math.round(x.kcal), source: x.source })),
+            photo_urls: meals.filter((x) => x.source === 'photo' && x.photo_url).map((x) => x.photo_url).slice(0, 3),
+            workouts: (d.workouts || []).map((x) => ({ name: x.name, minutes: x.minutes }))
+          };
+          let res;
+          try {
+            res = await fetch(`${CFG.SUPABASE_URL}/functions/v1/draft-advice`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: CFG.SUPABASE_ANON_KEY,
+                Authorization: 'Bearer ' + CFG.SUPABASE_ANON_KEY
+              },
+              body: JSON.stringify(payload)
+            });
+          } catch (e) {
+            throw new Error('连不上 AI 服务，请检查网络');
+          }
+          if (!res.ok) {
+            const t = await res.text();
+            console.error('[aiDraft] 失败', res.status, t);
+            throw new Error('AI 起草失败（' + res.status + '），可以自己手写');
+          }
+          const r = await res.json();
+          if (!r.text) throw new Error('AI 没给出内容，稍后再试');
+          state.aiDraft = r.text;
+          toast('AI 草稿已生成，改完点「保存并下发」');
+        } catch (e) {
+          console.error('[aiDraft]', e);
+          toast(e.message || 'AI 起草失败');
+        } finally {
+          state.aiBusy = false; render();
+        }
+        break;
+      }
       case 'openMember':
-        state.coachMemberId = id; render();
+        state.coachMemberId = id; state.aiDraft = null; render();
         await loadCoachDetail(id); render(); break;
-      case 'coachBack': state.coachMemberId = ''; state.coachDetail = null; render(); break;
+      case 'coachBack': state.coachMemberId = ''; state.coachDetail = null; state.aiDraft = null; render(); break;
       case 'savePlan': {
         await rpc('coach_save_plan', { p_pass: state.coachPass, p_member: id, p_kcal: num(val('dKcal')), p_note: val('dNote') });
+        state.aiDraft = null;
         await loadCoachDetail(id); render(); toast('已下发，会员端立刻可见');
         break;
       }
@@ -993,10 +1286,18 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'dNote') { state.aiDraft = e.target.value; return; }
   if (e.target.id !== 'foodSearch') return;
   state.foodQuery = e.target.value;
   const box = document.getElementById('foodList');
   if (box) box.innerHTML = foodRows(filterFoods());
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.id !== 'photoFile') return;
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  runPhotoFlow(f);
 });
 
 /* ---------------- 启动 ---------------- */
