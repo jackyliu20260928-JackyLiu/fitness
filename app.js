@@ -246,11 +246,12 @@ async function runPhotoFlow(file) {
 }
 
 /* ---------------- 状态 ---------------- */
-const MY_FOODS_KEY = 'fit_my_foods';
+/* 自建食物按 token 分开存：同一台手机换个人打开，不会看到上一个人的食物 */
+function myFoodsKey(token) { return 'fit_my_foods_' + (token || 'anon'); }
 
-function loadMyFoods() {
+function loadMyFoods(token) {
   try {
-    const v = JSON.parse(localStorage.getItem(MY_FOODS_KEY) || '[]');
+    const v = JSON.parse(localStorage.getItem(myFoodsKey(token)) || '[]');
     return Array.isArray(v) ? v : [];
   } catch (e) { console.warn('[myFoods] 读取失败', e); return []; }
 }
@@ -265,7 +266,7 @@ const state = {
   busy: false,         // 防重复提交
   sheet: null,
   foodQuery: '', foodCat: '全部',
-  myFoods: loadMyFoods(),
+  myFoods: [],   // 拿到 token 后才加载（见 boot）
   coachPass: localStorage.getItem('fit_coach_pass') || '',
   coachDate: todayStr(),
   coachList: null,
@@ -291,7 +292,7 @@ let temp = {};
 function allFoods() { return FOODS.concat(state.myFoods); }
 function saveMyFood(food) {
   state.myFoods = state.myFoods.filter((x) => x.name !== food.name).concat([food]).slice(-50);
-  try { localStorage.setItem(MY_FOODS_KEY, JSON.stringify(state.myFoods)); }
+  try { localStorage.setItem(myFoodsKey(state.token), JSON.stringify(state.myFoods)); }
   catch (e) { console.warn('[myFoods] 保存失败', e); }
 }
 
@@ -304,6 +305,7 @@ async function boot() {
   if (t) {
     state.mode = 'member';
     state.token = t;
+    state.myFoods = loadMyFoods(t);
     await loadMember();
     await refreshMsgPeek();
     render();
