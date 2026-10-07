@@ -45,7 +45,20 @@ const FOODS = [
   { id: 'f17', name: '拿铁咖啡', cat: '饮品', unit: '1杯', kcal: 135, p: 7, c: 13, f: 6 },
   { id: 'f18', name: '乳清蛋白粉', cat: '补剂', unit: '1勺', kcal: 120, p: 24, c: 3, f: 1.5 }
 ];
-const CATS = ['全部', '主食', '肉蛋类', '蔬菜', '水果', '奶制品', '坚果', '饮品', '补剂'];
+const CATS = ['全部', '主食', '肉蛋类', '蔬菜', '水果', '奶制品', '坚果', '饮品', '补剂', '我的'];
+
+/** 按关键词 + 分类过滤食物 */
+function filterFoods() {
+  const q = state.foodQuery.trim();
+  const cat = state.foodCat;
+  return allFoods().filter((f) => {
+    const okQ = !q || f.name.includes(q) || (f.cat || '').includes(q);
+    let okC = true;
+    if (cat === '我的') okC = state.myFoods.some((x) => x.id === f.id);
+    else if (cat !== '全部') okC = f.cat === cat;
+    return okQ && okC;
+  });
+}
 
 /* ---------------- 工具 ---------------- */
 function dstr(d) { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
@@ -71,19 +84,29 @@ function configured() { return !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY); }
 
 async function rpc(fn, params) {
   if (!configured()) throw new Error('还没配置云数据库（见 config.js）');
-  const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: 'POST',
-    headers: {
-      apikey: CFG.SUPABASE_ANON_KEY,
-      Authorization: 'Bearer ' + CFG.SUPABASE_ANON_KEY,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(params || {})
-  });
+  let res;
+  try {
+    res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: {
+        apikey: CFG.SUPABASE_ANON_KEY,
+        Authorization: 'Bearer ' + CFG.SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(params || {})
+    });
+  } catch (err) {
+    console.error('[rpc] ' + fn + ' 网络异常', err);
+    throw new Error('连不上服务器，请检查手机网络后重试');
+  }
   if (!res.ok) {
     const t = await res.text();
     console.error('[rpc] ' + fn + ' 失败', res.status, t);
-    throw new Error('网络请求失败（' + res.status + '）');
+    if (res.status === 401 || res.status === 403) throw new Error('访问密钥无效，请联系教练');
+    if (res.status === 404) throw new Error('接口不存在，数据库可能还没初始化');
+    if (res.status === 429) throw new Error('操作太频繁，稍等几秒再试');
+    if (res.status >= 500) throw new Error('云数据库暂时不可用（免费项目长期闲置会被暂停，需要教练登录 Supabase 恢复）');
+    throw new Error('请求失败（' + res.status + '），请稍后重试');
   }
   const data = await res.json();
   if (data && data.ok === false) throw new Error(data.error || '操作失败');
@@ -91,6 +114,15 @@ async function rpc(fn, params) {
 }
 
 /* ---------------- 状态 ---------------- */
+const MY_FOODS_KEY = 'fit_my_foods';
+
+function loadMyFoods() {
+  try {
+    const v = JSON.parse(localStorage.getItem(MY_FOODS_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (e) { console.warn('[myFoods] 读取失败', e); return []; }
+}
+
 const state = {
   mode: '',            // member / coach
   token: '',           // 会员凭证
@@ -98,20 +130,33 @@ const state = {
   mtab: 'today',
   home: null,          // member_home 返回
   loading: false,
+  busy: false,         // 防重复提交
   sheet: null,
   foodQuery: '', foodCat: '全部',
+  myFoods: loadMyFoods(),
   coachPass: localStorage.getItem('fit_coach_pass') || '',
+  coachDate: todayStr(),
   coachList: null,
   coachMemberId: '',
   coachDetail: null,
-  coachFilter: 'all'
+  coachFilter: 'all',
+  coachBusy: false
 };
 let temp = {};
+
+/** 内置食物库 + 会员自己加过的 */
+function allFoods() { return FOODS.concat(state.myFoods); }
+function saveMyFood(food) {
+  state.myFoods = state.myFoods.filter((x) => x.name !== food.name).concat([food]).slice(-50);
+  try { localStorage.setItem(MY_FOODS_KEY, JSON.stringify(state.myFoods)); }
+  catch (e) { console.warn('[myFoods] 保存失败', e); }
+}
 
 const app = document.getElementById('app');
 
 /* ---------------- 入口路由 ---------------- */
 async function boot() {
+  if (!configured()) { state.mode = 'landing'; render(); return; }
   const t = qs('token');
   if (t) {
     state.mode = 'member';
@@ -121,7 +166,20 @@ async function boot() {
   }
   if (qs('coach') || state.coachPass) {
     state.mode = 'coach';
-    if (state.coachPass) await loadCoachList();
+    if (state.coachPass) {
+      try {
+        await loadCoachList();
+      } catch (e) {
+        // 口令失效（比如在数据库里改过）→ 清掉本地记录，回到登录页
+        console.warn('[boot] 口令失效，回到登录页', e);
+        state.coachPass = '';
+        state.coachList = null;
+        try { localStorage.removeItem('fit_coach_pass'); } catch (_) { /* ignore */ }
+        render();
+        toast('口令已失效，请重新输入');
+        return;
+      }
+    }
     render();
     return;
   }
@@ -321,8 +379,7 @@ function renderReportCard(intake, workoutMin) {
 }
 
 function renderAdd() {
-  const q = state.foodQuery.trim();
-  const list = FOODS.filter((f) => (!q || f.name.includes(q) || f.cat.includes(q)) && (state.foodCat === '全部' || f.cat === state.foodCat));
+  const list = filterFoods();
   return `<div class="wrap">
     <div class="phead"><h1>加餐食</h1><p>选食物 → 自动算热量与三大营养素</p></div>
     <div class="search">
@@ -331,13 +388,15 @@ function renderAdd() {
     </div>
     <div class="cats">${CATS.map((c) => `<button data-act="cat" data-v="${c}" class="${state.foodCat === c ? 'on' : ''}">${c}</button>`).join('')}</div>
     <div class="card" id="foodList">${foodRows(list)}</div>
+    <button class="btn ghost" style="margin-top:4px" data-act="openCustomFood">菜单里没有？手动填一个</button>
+    <div class="hint">手动填过的食物会记住，下次在「我的」分类里直接选</div>
   </div>`;
 }
 function foodRows(list) {
-  if (!list.length) return '<div class="empty">没找到，换个词试试</div>';
+  if (!list.length) return '<div class="empty">没找到，换个词试试<br>也可以点下面「手动填一个」</div>';
   return list.map((f) => `<div class="frow">
     <div class="fmeta"><div class="n">${esc(f.name)}</div>
-      <div class="s">${esc(f.unit)} · 蛋${Math.round(f.p)} 碳${Math.round(f.c)} 脂${Math.round(f.f)}</div></div>
+      <div class="s">${esc(f.unit)} · 蛋${Math.round(f.p)} 碳${Math.round(f.c)} 脂${Math.round(f.f)}${f.cat === '我的' ? ' · 我加的' : ''}</div></div>
     <div class="fkcal" style="margin-right:8px">${f.kcal}<em>kcal</em></div>
     <button class="addbtn" data-act="pickFood" data-id="${f.id}">+</button>
   </div>`).join('');
@@ -422,7 +481,7 @@ function renderCoachLogin() {
   <div class="wrap">
     <div class="card">
       <b style="font-size:15px">输入教练口令</b>
-      <div class="muted" style="margin:8px 0 12px">默认口令 888888，可在数据库里改</div>
+      <div class="muted" style="margin:8px 0 12px">口令存在数据库里，忘了可以重置（见交付说明）</div>
       <div class="field"><input id="coachPass" type="password" placeholder="教练口令"></div>
       <button class="btn primary" data-act="coachLogin">进入</button>
       <button class="btn ghost" style="margin-top:8px" data-act="toLanding">返回</button>
@@ -455,14 +514,24 @@ function renderCoachList() {
       ${withAlert(x) ? `<div class="alert">${esc(withAlert(x))}</div>` : ''}
     </div>`).join('');
 
-  return `<div class="topbar"><div class="row">
-      <div><div class="brand">教练后台</div><div class="who">${todayStr()} · ${list.length} 位会员</div></div>
+  return `<div class="topbar">
+    <div class="row">
+      <div><div class="brand">教练后台</div><div class="who">${list.length} 位会员 · 点会员看详情</div></div>
+      <div class="dateswitch">
+        <button data-act="cPrev">‹</button>
+        <span>${friendly(state.coachDate)}</span>
+        <button data-act="cNext">›</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="del" data-act="coachExport">导出备份</button>
       <button class="del" data-act="coachExit">退出</button>
-    </div></div>
+    </div>
+  </div>
   <div class="wrap">
     <div class="dash">
-      <h2>今日会员看板</h2>
-      <div class="sub">点会员可看详情、写指导</div>
+      <h2>${friendly(state.coachDate)}的会员看板</h2>
+      <div class="sub">摄入 / 运动 / 打卡，异常自动标红</div>
       <div class="stats">
         <div class="stat"><b>${list.length}</b><span>在带会员</span></div>
         <div class="stat"><b>${done}</b><span>已记录</span></div>
@@ -481,11 +550,11 @@ function renderCoachList() {
 
 function alertOf(x) {
   const kcal = x.plan.kcal || 0;
-  if (!x.meal_count) return '今天还没有记录饮食';
-  if (kcal && x.intake < kcal * 0.6) return `今天只吃了 ${Math.round(x.intake)} kcal，明显偏低（目标 ${kcal}）`;
-  if (kcal && x.intake > kcal * 1.15) return `今天已超目标 ${Math.round(x.intake - kcal)} kcal`;
+  if (!x.meal_count) return '这一天还没有记录饮食';
+  if (kcal && x.intake < kcal * 0.6) return `只吃了 ${Math.round(x.intake)} kcal，明显偏低（目标 ${kcal}）`;
+  if (kcal && x.intake > kcal * 1.15) return `已超目标 ${Math.round(x.intake - kcal)} kcal`;
   if (x.weight_delta <= -0.8) return `最近掉秤 ${Math.abs(x.weight_delta)}kg，偏快，注意别掉肌肉`;
-  if (!x.checked_in) return '今天还没称体重';
+  if (!x.checked_in) return '这一天还没称体重';
   return '';
 }
 
@@ -534,7 +603,7 @@ function renderCoachDetail() {
       <div class="muted" style="margin-top:8px;line-height:1.7">把这个链接发给该会员，他点开就能记录，不用注册。</div>
     </div>
 
-    <div class="sec"><div class="l"><div class="bar"></div><b>今日餐食</b></div><span class="muted">${Math.round(tot(d.meals).kcal)} kcal</span></div>
+    <div class="sec"><div class="l"><div class="bar"></div><b>${friendly(state.coachDate)}的餐食</b></div><span class="muted">${Math.round(tot(d.meals).kcal)} kcal</span></div>
     <div class="card">
       ${d.meals.length ? MEALS.map((meal) => {
         const items = d.meals.filter((x) => x.meal === meal.key);
@@ -547,7 +616,7 @@ function renderCoachDetail() {
       }).join('') : '<div class="empty">今天还没有记录</div>'}
     </div>
 
-    <div class="sec"><div class="l"><div class="bar"></div><b>今日运动</b></div><span class="muted">${workoutMin} 分钟</span></div>
+    <div class="sec"><div class="l"><div class="bar"></div><b>${friendly(state.coachDate)}的运动</b></div><span class="muted">${workoutMin} 分钟</span></div>
     <div class="card">
       ${d.workouts.length ? d.workouts.map((w) => `<div class="frow">
           <div class="fmeta"><div class="n">${esc(w.name)}</div><div class="s">${w.note ? esc(w.note) : '—'}</div></div>
@@ -561,6 +630,14 @@ function renderCoachDetail() {
         <b>${c.weight} kg${c.body_fat ? ' · 体脂 ' + c.body_fat + '%' : ''}</b></div>`).join('')
         : '<div class="empty">还没有打卡</div>'}
     </div>
+
+    <div class="card">
+      <b style="font-size:14px">停用该会员</b>
+      <div class="muted" style="margin:6px 0 12px;line-height:1.7">
+        停用后他的专属链接会失效，历史数据保留。用来清理不再跟的会员或测试账号。
+      </div>
+      <button class="btn ghost" data-act="coachSetActive" data-id="${m.id}">停用这个会员</button>
+    </div>
   </div>`;
 }
 
@@ -569,7 +646,7 @@ function renderSheet() {
   const s = state.sheet;
   if (!s) return '';
   if (s.type === 'pickFood') {
-    const f = FOODS.find((x) => x.id === s.foodId);
+    const f = allFoods().find((x) => x.id === s.foodId);
     if (!f) return '';
     const kcal = Math.round(f.kcal * s.amount);
     return `<div class="mask" data-act="closeSheet"><div class="sheet">
@@ -585,6 +662,30 @@ function renderSheet() {
       <div class="field"><label>记到哪一餐</label>
         <div class="seg">${MEALS.map((x) => `<button data-act="sheetMeal" data-v="${x.key}" class="${s.meal === x.key ? 'on' : ''}">${x.label}</button>`).join('')}</div></div>
       <button class="btn primary" data-act="confirmFood">加入${(MEALS.find((x) => x.key === s.meal) || MEALS[0]).label}</button>
+      <button class="btn ghost" style="margin-top:8px" data-act="closeSheet">取消</button>
+    </div></div>`;
+  }
+  if (s.type === 'customFood') {
+    return `<div class="mask" data-act="closeSheet"><div class="sheet">
+      <h3>手动填一个食物</h3>
+      <div class="sub">照着包装上的营养成分表填就行</div>
+      <div style="height:14px"></div>
+      <div class="field"><label>食物名称</label><input id="cfName" placeholder="例如：楼下那家牛肉面"></div>
+      <div class="grid2">
+        <div class="field"><label>单位</label><input id="cfUnit" placeholder="1份 / 100g"></div>
+        <div class="field"><label>热量 kcal</label><input id="cfKcal" type="number" placeholder="如 650"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>蛋白质 g</label><input id="cfP" type="number" placeholder="选填"></div>
+        <div class="field"><label>碳水 g</label><input id="cfC" type="number" placeholder="选填"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>脂肪 g</label><input id="cfF" type="number" placeholder="选填"></div>
+        <div class="field"><label>吃了几份</label><input id="cfAmount" type="number" step="0.5" value="1"></div>
+      </div>
+      <div class="field"><label>记到哪一餐</label>
+        <div class="seg">${MEALS.map((x) => `<button data-act="sheetMeal" data-v="${x.key}" class="${s.meal === x.key ? 'on' : ''}">${x.label}</button>`).join('')}</div></div>
+      <button class="btn primary" data-act="confirmCustomFood">加入${(MEALS.find((x) => x.key === s.meal) || MEALS[0]).label}</button>
       <button class="btn ghost" style="margin-top:8px" data-act="closeSheet">取消</button>
     </div></div>`;
   }
@@ -640,18 +741,24 @@ async function loadMember() {
   } catch (e) {
     console.error('[member] 加载失败', e);
     state.home = null;
-    app.innerHTML = `<div class="wrap" style="padding-top:60px"><div class="card">
-      <b>打不开</b><div class="muted" style="margin-top:8px;line-height:1.8">${esc(e.message)}<br>请确认用的是教练发给你的专属链接。</div></div></div>`;
+    app.innerHTML = `<div class="wrap" style="padding-top:48px"><div class="card">
+      <b style="font-size:16px">暂时打不开</b>
+      <div class="muted" style="margin:10px 0 18px;line-height:1.8">${esc(e.message)}</div>
+      <button class="btn primary" data-act="retry">重试</button>
+      <div class="muted" style="margin-top:16px;line-height:1.7">
+        如果还是不行：① 确认用的是教练发给你的专属链接；② 把这句话截图发给教练。
+      </div>
+    </div></div>`;
     return;
   } finally { state.loading = false; }
   render();
 }
 async function loadCoachList() {
-  state.coachList = await rpc('coach_list', { p_pass: state.coachPass, p_date: todayStr() });
-  state.coachList = state.coachList.members || [];
+  const r = await rpc('coach_list', { p_pass: state.coachPass, p_date: state.coachDate });
+  state.coachList = r.members || [];
 }
 async function loadCoachDetail(id) {
-  state.coachDetail = await rpc('coach_member', { p_pass: state.coachPass, p_member: id, p_date: todayStr() });
+  state.coachDetail = await rpc('coach_member', { p_pass: state.coachPass, p_member: id, p_date: state.coachDate });
 }
 
 /* ---------------- 交互 ---------------- */
@@ -689,16 +796,51 @@ document.addEventListener('click', async (e) => {
         state.sheet.amount = Math.max(0.5, Math.min(10, round1(state.sheet.amount + Number(v)))); render(); break;
       case 'sheetMeal': state.sheet.meal = v; render(); break;
       case 'confirmFood': {
-        const s = state.sheet, f = FOODS.find((x) => x.id === s.foodId);
-        const n = s.amount;
-        await rpc('member_add_meal', {
-          p_token: state.token, p_date: state.date, p_meal: s.meal, p_name: f.name,
-          p_amount: n, p_unit: f.unit, p_kcal: Math.round(f.kcal * n),
-          p_p: round1(f.p * n), p_c: round1(f.c * n), p_f: round1(f.f * n)
-        });
-        state.sheet = null; state.mtab = 'today';
-        await loadMember();
-        toast(`已加入${(MEALS.find((x) => x.key === s.meal) || MEALS[0]).label}`);
+        if (state.busy) return;
+        const s = state.sheet, f = allFoods().find((x) => x.id === s.foodId);
+        if (!f) return toast('食物不存在');
+        const n = Math.max(0.5, Math.min(20, round1(s.amount)));
+        state.busy = true;
+        try {
+          await rpc('member_add_meal', {
+            p_token: state.token, p_date: state.date, p_meal: s.meal, p_name: f.name,
+            p_amount: n, p_unit: f.unit, p_kcal: Math.round(f.kcal * n),
+            p_p: round1(f.p * n), p_c: round1(f.c * n), p_f: round1(f.f * n)
+          });
+          state.sheet = null; state.mtab = 'today';
+          await loadMember();
+          toast(`已加入${(MEALS.find((x) => x.key === s.meal) || MEALS[0]).label}`);
+        } finally { state.busy = false; }
+        break;
+      }
+      case 'openCustomFood':
+        state.sheet = { type: 'customFood', meal: temp.meal || suggestMeal() };
+        render(); break;
+      case 'confirmCustomFood': {
+        if (state.busy) return;
+        const s = state.sheet;
+        const name = val('cfName');
+        if (!name) return toast('请填食物名称');
+        const unitKcal = num(val('cfKcal'), 0);
+        if (!unitKcal) return toast('请填热量');
+        const n = Math.max(0.5, Math.min(20, num(val('cfAmount'), 1)));
+        const unit = val('cfUnit') || '1份';
+        const mcP = num(val('cfP'), 0), mcC = num(val('cfC'), 0), mcF = num(val('cfF'), 0);
+        state.busy = true;
+        try {
+          await rpc('member_add_meal', {
+            p_token: state.token, p_date: state.date, p_meal: s.meal, p_name: name,
+            p_amount: n, p_unit: unit, p_kcal: Math.round(unitKcal * n),
+            p_p: round1(mcP * n), p_c: round1(mcC * n), p_f: round1(mcF * n)
+          });
+          saveMyFood({
+            id: 'my_' + Date.now(), name: name.slice(0, 20), cat: '我的', unit,
+            kcal: Math.round(unitKcal), p: mcP, c: mcC, f: mcF
+          });
+          state.sheet = null; state.mtab = 'today';
+          await loadMember();
+          toast('已加入，并记到「我的」里');
+        } finally { state.busy = false; }
         break;
       }
       case 'closeSheet':
@@ -711,14 +853,18 @@ document.addEventListener('click', async (e) => {
       /* --- 运动 --- */
       case 'pickWorkout': temp.workout = v; render(); break;
       case 'saveWorkout': {
+        if (state.busy) return;
         if (!temp.workout) return toast('先选一个运动');
-        const minutes = num(val('wkMinutes'), 0);
-        if (!minutes) return toast('填一下时长');
-        await rpc('member_add_workout', {
-          p_token: state.token, p_date: state.date, p_name: temp.workout, p_minutes: minutes, p_note: val('wkNote')
-        });
-        temp.workout = ''; temp.workoutMin = minutes;
-        await loadMember(); toast('已记录');
+        const minutes = Math.max(1, Math.min(600, num(val('wkMinutes'), 0)));
+        if (!minutes) return toast('填一下时长（分钟）');
+        state.busy = true;
+        try {
+          await rpc('member_add_workout', {
+            p_token: state.token, p_date: state.date, p_name: temp.workout, p_minutes: minutes, p_note: val('wkNote')
+          });
+          temp.workout = ''; temp.workoutMin = minutes;
+          await loadMember(); toast('已记录');
+        } finally { state.busy = false; }
         break;
       }
       case 'delWorkout':
@@ -728,16 +874,27 @@ document.addEventListener('click', async (e) => {
       /* --- 打卡 --- */
       case 'openCheckin': state.sheet = { type: 'checkin' }; render(); break;
       case 'saveCheckin': {
+        if (state.busy) return;
         const w = num(val('ckWeight'));
         if (!w) return toast('请填体重');
-        await rpc('member_add_checkin', {
-          p_token: state.token, p_date: todayStr(), p_weight: w,
-          p_body_fat: num(val('ckFat')), p_waist: num(val('ckWaist')), p_note: val('ckNote')
-        });
-        state.sheet = null; state.date = todayStr();
-        await loadMember(); toast('打卡成功');
+        if (w < 20 || w > 300) return toast('体重请填 20~300 kg');
+        state.busy = true;
+        try {
+          await rpc('member_add_checkin', {
+            p_token: state.token, p_date: todayStr(), p_weight: w,
+            p_body_fat: num(val('ckFat')), p_waist: num(val('ckWaist')), p_note: val('ckNote')
+          });
+          state.sheet = null; state.date = todayStr();
+          await loadMember(); toast('打卡成功');
+        } finally { state.busy = false; }
         break;
       }
+
+      /* --- 通用 --- */
+      case 'retry':
+        if (state.mode === 'member') await loadMember();
+        else render();
+        break;
 
       /* --- 教练端 --- */
       case 'toCoach': state.mode = 'coach'; render(); break;
@@ -745,16 +902,56 @@ document.addEventListener('click', async (e) => {
       case 'coachLogin': {
         const pass = val('coachPass');
         if (!pass) return toast('请输入口令');
-        state.coachPass = pass;
-        await loadCoachList();
-        localStorage.setItem('fit_coach_pass', pass);
-        render(); toast('欢迎回来');
+        if (state.coachBusy) return;
+        state.coachBusy = true;
+        try {
+          const r = await rpc('coach_list', { p_pass: pass, p_date: state.coachDate });
+          state.coachPass = pass;
+          state.coachList = r.members || [];
+          try { localStorage.setItem('fit_coach_pass', pass); } catch (_) { /* ignore */ }
+          render(); toast('欢迎回来');
+        } finally { state.coachBusy = false; }
         break;
       }
       case 'coachExit':
         state.coachPass = ''; state.coachList = null; state.coachMemberId = '';
         localStorage.removeItem('fit_coach_pass'); state.mode = 'landing'; render(); break;
       case 'cFilter': state.coachFilter = v; render(); break;
+      case 'cPrev':
+      case 'cNext': {
+        state.coachDate = shiftDate(state.coachDate, act === 'cPrev' ? -1 : 1);
+        if (state.coachMemberId) { await loadCoachDetail(state.coachMemberId); render(); }
+        else { await loadCoachList(); render(); }
+        break;
+      }
+      case 'coachExport': {
+        if (state.coachBusy) return;
+        state.coachBusy = true;
+        toast('正在导出…');
+        try {
+          const data = await rpc('coach_export', { p_pass: state.coachPass });
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = '健身小工具备份_' + todayStr() + '.json';
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+          console.info('[coach] 已导出备份');
+          toast('备份已下载，请妥善保存');
+        } finally { state.coachBusy = false; }
+        break;
+      }
+      case 'coachSetActive': {
+        const mm = (state.coachList || []).find((x) => x.id === id)
+          || (state.coachDetail && state.coachDetail.member) || null;
+        const nm = mm ? mm.name : '该会员';
+        if (!confirm('确定停用「' + nm + '」吗？\n停用后他的专属链接会失效，历史数据保留。')) break;
+        await rpc('coach_set_active', { p_pass: state.coachPass, p_member: id, p_active: false });
+        state.coachMemberId = ''; state.coachDetail = null;
+        await loadCoachList(); render();
+        toast('已停用');
+        break;
+      }
       case 'openMember':
         state.coachMemberId = id; render();
         await loadCoachDetail(id); render(); break;
@@ -798,10 +995,8 @@ document.addEventListener('click', async (e) => {
 document.addEventListener('input', (e) => {
   if (e.target.id !== 'foodSearch') return;
   state.foodQuery = e.target.value;
-  const q = state.foodQuery.trim();
-  const list = FOODS.filter((f) => (!q || f.name.includes(q) || f.cat.includes(q)) && (state.foodCat === '全部' || f.cat === state.foodCat));
   const box = document.getElementById('foodList');
-  if (box) box.innerHTML = foodRows(list);
+  if (box) box.innerHTML = foodRows(filterFoods());
 });
 
 /* ---------------- 启动 ---------------- */
