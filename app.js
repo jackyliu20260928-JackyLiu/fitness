@@ -783,6 +783,8 @@ function renderCoachDetail() {
     </div></div>
   <div class="wrap">
     <div class="card">
+      <div class="row" style="margin-bottom:6px"><b style="font-size:14.5px">会员资料</b>
+        <button class="del" data-act="openEditMember">编辑</button></div>
       <div class="kv"><span>身高 / 体重</span><b>${m.height}cm / ${m.weight}kg</b></div>
       <div class="kv"><span>体脂率 / 年龄</span><b>${m.body_fat}% · ${m.age}岁</b></div>
       <div class="kv"><span>活动量</span><b>${(ACT[m.activity] || ACT.sedentary).label}</b></div>
@@ -819,7 +821,10 @@ function renderCoachDetail() {
       <div class="row" style="margin-bottom:8px"><b style="font-size:14.5px">会员专属链接</b>
         <button class="del" data-act="copyLink" data-v="${esc(link)}">复制</button></div>
       <div class="linkbox">${esc(link)}</div>
-      <div class="muted" style="margin-top:8px;line-height:1.7">把这个链接发给该会员，他点开就能记录，不用注册。</div>
+      <div class="muted" style="margin-top:8px;line-height:1.7">
+        这条是 <b>${esc(m.name)}</b> 的专属链接，<b>只能发给他本人</b>。<br>
+        发给别的会员，两个人的记录会混在一起。每个会员都要单独建、单独发。
+      </div>
     </div>
 
     <div class="sec"><div class="l"><div class="bar"></div><b>${friendly(state.coachDate)}的餐食</b></div><span class="muted">${Math.round(tot(d.meals).kcal)} kcal</span></div>
@@ -1017,6 +1022,37 @@ function renderSheet() {
         <button data-act="nmGoal" data-v="gain" class="${temp.goal === 'gain' ? 'on' : ''}">增肌</button>
         <button data-act="nmGoal" data-v="keep" class="${temp.goal === 'keep' ? 'on' : ''}">保持</button></div></div>
       <button class="btn primary" data-act="saveNewMember">创建会员</button>
+      <button class="btn ghost" style="margin-top:8px" data-act="closeSheet">取消</button>
+    </div></div>`;
+  }
+  if (s.type === 'editMember') {
+    const m = s.member;
+    const g = temp.edGender || m.gender;
+    const goal = temp.edGoal || m.goal;
+    const act = temp.edActivity || m.activity;
+    return `<div class="mask" data-act="closeSheet"><div class="sheet">
+      <h3>编辑会员资料</h3>
+      <div class="sub">改完资料立即生效，会员的专属链接和已有数据都不受影响</div>
+      <div style="height:14px"></div>
+      <div class="field"><label>姓名</label><input id="edName" value="${esc(m.name)}"></div>
+      <div class="grid2">
+        <div class="field"><label>身高 cm</label><input id="edHeight" type="number" value="${m.height}"></div>
+        <div class="field"><label>体重 kg</label><input id="edWeight" type="number" step="0.1" value="${m.weight}"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>年龄</label><input id="edAge" type="number" value="${m.age}"></div>
+        <div class="field"><label>体脂率 %</label><input id="edFat" type="number" step="0.1" value="${m.body_fat}"></div>
+      </div>
+      <div class="field"><label>性别</label><div class="seg">
+        <button data-act="edGender" data-v="male" class="${g === 'male' ? 'on' : ''}">男</button>
+        <button data-act="edGender" data-v="female" class="${g === 'female' ? 'on' : ''}">女</button></div></div>
+      <div class="field"><label>目标</label><div class="seg">
+        <button data-act="edGoal" data-v="lose" class="${goal === 'lose' ? 'on' : ''}">减脂</button>
+        <button data-act="edGoal" data-v="gain" class="${goal === 'gain' ? 'on' : ''}">增肌</button>
+        <button data-act="edGoal" data-v="keep" class="${goal === 'keep' ? 'on' : ''}">保持</button></div></div>
+      <div class="field"><label>活动量（影响每日热量测算）</label><div class="seg cols">
+        ${Object.keys(ACT).map((k) => `<button data-act="edActivity" data-v="${k}" class="${act === k ? 'on' : ''}">${ACT[k].label}</button>`).join('')}</div></div>
+      <button class="btn primary" data-act="saveEditMember">保存</button>
       <button class="btn ghost" style="margin-top:8px" data-act="closeSheet">取消</button>
     </div></div>`;
   }
@@ -1411,6 +1447,50 @@ document.addEventListener('click', async (e) => {
       }
       case 'reloadCoachChat': {
         await loadCoachMsgs(true); render(); toast('已刷新');
+        break;
+      }
+
+      /* --- 编辑会员资料 --- */
+      case 'openEditMember': {
+        const d0 = state.coachDetail;
+        if (!d0 || !d0.member) return toast('先打开会员详情');
+        state.sheet = { type: 'editMember', member: d0.member };
+        temp = {};
+        render();
+        break;
+      }
+      case 'edGender': temp.edGender = v; markOn(el); break;
+      case 'edGoal': temp.edGoal = v; markOn(el); break;
+      case 'edActivity': temp.edActivity = v; markOn(el); break;
+      case 'saveEditMember': {
+        if (state.coachBusy) return;
+        const d = state.coachDetail;
+        const mid = state.coachMemberId;
+        if (!mid || !d || !d.member) return toast('先打开会员详情');
+        const name = val('edName');
+        if (!name) return toast('请填姓名');
+        state.coachBusy = true;
+        try {
+          const r = await rpc('coach_update_member', {
+            p_pass: state.coachPass, p_member: mid,
+            p: {
+              name,
+              height: num(val('edHeight'), d.member.height),
+              weight: num(val('edWeight'), d.member.weight),
+              age: num(val('edAge'), d.member.age),
+              body_fat: num(val('edFat'), d.member.body_fat),
+              gender: temp.edGender || d.member.gender,
+              goal: temp.edGoal || d.member.goal,
+              activity: temp.edActivity || d.member.activity
+            }
+          });
+          if (r && r.ok === false) throw new Error(r.error || '保存失败');
+          state.sheet = null; temp = {};
+          await loadCoachDetail(mid);
+          await loadCoachList();
+          render();
+          toast('资料已更新，链接没变');
+        } finally { state.coachBusy = false; }
         break;
       }
       case 'saveKcal': {
