@@ -468,7 +468,7 @@ function renderToday() {
 
     <button class="btn photo" data-act="openPhoto" data-meal="${suggestMeal()}">
       <span class="cam">📷</span>
-      <span class="ptxt"><b>拍照记录这一餐</b><em>不用称克数，拍张照就行</em></span>
+      <span class="ptxt"><b>拍照记录这一餐</b><em>拍一张就行，不用称克数</em></span>
     </button>
 
     ${m.plan_note ? `<div class="card tight">
@@ -858,10 +858,10 @@ function renderSheet() {
         <label class="photopick">
           <span class="cam">📷</span>
           <b>点这里拍照 / 从相册选</b>
-          <em>建议拍全一点，把整桌都拍进去</em>
+          <em>拍你自己要吃的那一份就行</em>
           <input id="photoFile" type="file" accept="image/*" capture="environment">
         </label>
-        <div class="hint">AI 给的是<b>大概值</b>，教练会复核后再给你正式建议。</div>
+        <div class="hint">看不准份量的话，AI 会问你一句，点一下就行。</div>
         <button class="btn ghost" style="margin-top:14px" data-act="closeSheet">取消</button>
       </div></div>`;
     }
@@ -876,15 +876,27 @@ function renderSheet() {
     }
 
     const a = s.ai;
+    const q0 = (a && Array.isArray(a.questions) && a.questions[0]) ? a.questions[0] : null;
+    let pick = 0;
+    if (q0) {
+      pick = (typeof s.pick === 'number') ? s.pick : Math.floor(q0.opts.length / 2);
+      pick = Math.max(0, Math.min(pick, q0.opts.length - 1));
+    }
+    const cur = q0 ? q0.opts[pick] : a;
+
     return `<div class="mask" data-act="closeSheet"><div class="sheet">
       <h3>${esc(a ? (a.summary || '照片记录') : '照片已上传')}</h3>
-      <div class="sub">${a ? 'AI 预估 · 仅供参考，教练会复核' : 'AI 暂时没识别出来，可以自己填个大概'}</div>
+      <div class="sub">${a ? 'AI 识别 · 教练还会复核' : 'AI 暂时没识别出来，可以自己填个大概'}</div>
       <img class="preview" src="${esc(s.photoUrl)}" alt="">
+      ${q0 ? `<div class="askbox">
+          <div class="askq">${esc(q0.q)}</div>
+          <div class="askopts">${q0.opts.map((o, i) => `<button data-act="photoPick" data-v="${i}" class="${i === pick ? 'on' : ''}">${esc(o.t)}</button>`).join('')}</div>
+        </div>` : ''}
       ${a ? `<div class="aibox">
-          <div class="airow"><span>热量</span><b>${Math.round(a.kcal || 0)} kcal</b></div>
-          <div class="airow"><span>蛋白质</span><b>${round1(a.p || 0)} g</b></div>
-          <div class="airow"><span>碳水</span><b>${round1(a.c || 0)} g</b></div>
-          <div class="airow"><span>脂肪</span><b>${round1(a.f || 0)} g</b></div>
+          <div class="airow"><span>热量</span><b>${Math.round(cur.kcal || 0)} kcal</b></div>
+          <div class="airow"><span>蛋白质</span><b>${round1(cur.p || 0)} g</b></div>
+          <div class="airow"><span>碳水</span><b>${round1(cur.c || 0)} g</b></div>
+          <div class="airow"><span>脂肪</span><b>${round1(cur.f || 0)} g</b></div>
         </div>${a.note ? `<div class="muted" style="line-height:1.75;font-size:13px;margin-top:10px">${esc(a.note)}</div>` : ''}`
       : `<div class="field" style="margin-top:12px"><label>大概多少热量（可留空）</label>
            <input id="photoKcal" type="number" placeholder="例如 650"></div>`}
@@ -1055,11 +1067,24 @@ document.addEventListener('click', async (e) => {
       case 'photoRetry':
         state.sheet = { type: 'photo', meal: (state.sheet && state.sheet.meal) || suggestMeal(), phase: 'pick' };
         render(); break;
+      case 'photoPick':
+        state.sheet.pick = Number(v) || 0; render(); break;
       case 'confirmPhoto': {
         if (state.busy) return;
         const s = state.sheet;
         const a = s.ai || null;
-        const kcal = a ? Math.round(a.kcal || 0) : num(val('photoKcal'), 0);
+        const q0 = (a && Array.isArray(a.questions) && a.questions[0]) ? a.questions[0] : null;
+        let chosen = a;
+        let picked = '';
+        if (q0) {
+          const idx = Math.max(0, Math.min(typeof s.pick === 'number' ? s.pick : Math.floor(q0.opts.length / 2), q0.opts.length - 1));
+          chosen = q0.opts[idx];
+          picked = chosen.t;
+        }
+        const kcal = a ? Math.round((chosen && chosen.kcal) || 0) : num(val('photoKcal'), 0);
+        let note = (a && a.note) || '';
+        if (q0) note = q0.q + ' → ' + picked + (note ? '｜' + note : '');
+        if (!a) note = '照片待教练评估';
         state.busy = true;
         try {
           await rpc('member_add_photo_meal', {
@@ -1069,10 +1094,10 @@ document.addEventListener('click', async (e) => {
             p_photo_url: s.photoUrl,
             p_summary: (a && a.summary) || '照片记录',
             p_kcal: Math.max(0, kcal),
-            p_p: a ? round1(a.p || 0) : 0,
-            p_c: a ? round1(a.c || 0) : 0,
-            p_f: a ? round1(a.f || 0) : 0,
-            p_ai_note: (a && a.note) || (a ? '' : '照片待教练评估')
+            p_p: a ? round1((chosen && chosen.p) || 0) : 0,
+            p_c: a ? round1((chosen && chosen.c) || 0) : 0,
+            p_f: a ? round1((chosen && chosen.f) || 0) : 0,
+            p_ai_note: note
           });
           state.sheet = null; state.mtab = 'today';
           await loadMember();
