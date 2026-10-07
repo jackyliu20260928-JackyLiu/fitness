@@ -1,5 +1,5 @@
 /* ============================================================
-   健身达人小工具 · 云端版
+   教练有数 · 云端版
    会员：用教练发的专属链接打开 → 填餐食/运动 → 看报告
    教练：打开网址 → 输口令 → 看所有人 → 写指导
    数据：Supabase（免费）
@@ -366,7 +366,7 @@ function renderSetupHint() {
 function renderLanding() {
   return `<div class="wrap" style="padding-top:56px">
     <div class="phead" style="text-align:center">
-      <h1 style="font-size:26px">健身达人小工具</h1>
+      <h1 style="font-size:26px">教练有数</h1>
       <p>会员记录饮食运动 · 教练实时查看并指导</p>
     </div>
     <div class="card">
@@ -390,7 +390,7 @@ function renderMemberTop() {
   const m = state.home && state.home.member;
   return `<div class="topbar"><div class="row">
       <div>
-        <div class="brand">健身<em>达人</em></div>
+        <div class="brand">教练<em>有数</em></div>
         <div class="who">${m ? esc(m.name) + ' · ' + GOALS[m.goal] : '加载中'}</div>
       </div>
       <div class="dateswitch">
@@ -688,7 +688,7 @@ function renderCoach() {
 }
 
 function renderCoachLogin() {
-  return `<div class="topbar"><div class="brand">健身<em>达人</em> · 教练后台</div></div>
+  return `<div class="topbar"><div class="brand">教练<em>有数</em> · 后台</div></div>
   <div class="wrap">
     <div class="card">
       <b style="font-size:15px">输入教练口令</b>
