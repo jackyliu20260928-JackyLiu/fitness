@@ -347,7 +347,7 @@ function render() {
     if (inp && state.foodQuery) { /* 保持值即可 */ }
     return;
   }
-  app.innerHTML = renderCoach();
+  app.innerHTML = renderCoach() + renderSheet() + renderToast();
 }
 function renderToast() { return '<div class="toast" id="toast"></div>'; }
 
