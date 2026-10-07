@@ -166,6 +166,8 @@ body {
   border-radius: 12px; padding: 11px 0; font-size: 13.5px; font-family: inherit; cursor: pointer;
 }
 .seg button.on { background: var(--green-l); border-color: var(--green); color: var(--green-d); font-weight: 700; }
+.seg.cols { flex-wrap: wrap; }
+.seg.cols button { flex: 1 1 calc(50% - 4px); }
 
 .kv { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .kv:last-child { border-bottom: 0; }
