@@ -365,3 +365,50 @@ body {
 .lightbox img { max-width: 100%; max-height: 82%; border-radius: 10px; }
 .lightbox .lbtip { color: rgba(255, 255, 255, 0.6); font-size: 12.5px; margin-top: 16px; }
 
+
+/* ---------- 教练 ↔ 会员 对话 ---------- */
+.chatentry { cursor: pointer; }
+.lastmsg {
+  font-size: 13.5px; color: var(--ink2); margin-top: 8px; line-height: 1.7;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.who2 { color: var(--ink3); }
+
+.dotred {
+  display: inline-block; min-width: 17px; height: 17px; line-height: 17px;
+  padding: 0 5px; margin-left: 6px; background: var(--red); color: #fff;
+  font-size: 11px; font-weight: 700; font-style: normal;
+  border-radius: 999px; text-align: center; vertical-align: 1px;
+}
+
+.chatpage { display: flex; flex-direction: column; height: calc(100vh - 84px); }
+.chatlist { flex: 1; overflow-y: auto; padding: 14px 16px; -webkit-overflow-scrolling: touch; }
+.chatlist.inline {
+  flex: none; max-height: 300px; padding: 12px 12px 4px;
+  background: var(--bg); border-radius: 12px; overflow-y: auto;
+}
+
+.msgrow { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 12px; }
+.msgrow.me { align-items: flex-end; }
+.bubble {
+  max-width: 78%; padding: 9px 13px; border-radius: 14px; font-size: 14.5px; line-height: 1.6;
+  background: #fff; color: var(--ink); box-shadow: 0 2px 8px rgba(20, 30, 60, .05);
+  white-space: pre-wrap; word-break: break-word; border-top-left-radius: 5px;
+}
+.msgrow.me .bubble { background: var(--green); color: #fff; border-top-left-radius: 14px; border-top-right-radius: 5px; }
+.mtime { font-size: 11px; color: var(--ink3); margin-top: 4px; padding: 0 4px; }
+
+.chatbar { display: flex; gap: 8px; align-items: center; padding: 10px 0 0; }
+.chatpage .chatbar {
+  padding: 10px 16px; background: #fff; border-top: 1px solid var(--line); flex: 0 0 auto;
+}
+.chatbar input {
+  flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 999px;
+  padding: 11px 14px; font-size: 15px; font-family: inherit; background: #fff; outline: none;
+}
+.chatbar input:focus { border-color: var(--green); }
+.chatbar .btn { width: auto; flex: 0 0 auto; margin: 0; padding: 11px 20px; border-radius: 999px; }
+
+.krow { display: flex; gap: 10px; align-items: center; }
+.krow input { flex: 1; min-width: 0; }
+.krow .btn { width: auto; flex: 0 0 auto; margin: 0; padding: 13px 18px; }
